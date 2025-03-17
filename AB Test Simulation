@@ -1,0 +1,124 @@
+import numpy as np
+import seaborn as sns
+import pandas as pd
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+import os
+import imageio
+from datetime import datetime
+from IPython.display import display, Image
+
+# Parameters
+fixed_y_min, fixed_y_max = -10, 50  # Set these to fixed values or None for dynamic adjustment
+start_plot = 10
+np.random.seed(42)
+n_samples = 10000  # Total samples
+conversion_rate_A = 0.06  # Base conversion rate
+conversion_rate_B = 0.075  # Higher conversion rate
+alpha = 0.05  # Significance level
+
+# Create a new folder for frames with a timestamp
+timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+frames_folder = f'Frames_{timestamp}'
+os.makedirs(frames_folder, exist_ok=True)
+
+# Simulating Data
+A_conversions = np.random.binomial(1, conversion_rate_A, n_samples)
+B_conversions = np.random.binomial(1, conversion_rate_B, n_samples)
+
+data = []
+percent_diffs = []
+frames = []  # Store frames for GIF creation
+
+# Function to compute power using the true population parameters
+def compute_power(n, p_A, p_B, alpha=0.05):
+    pooled_se = np.sqrt((p_A * (1 - p_A) / n) + (p_B * (1 - p_B) / n))
+    effect_size = (p_B - p_A) / pooled_se
+    z_alpha = stats.norm.ppf(1 - alpha / 2)
+    power = 1 - stats.norm.cdf(z_alpha - effect_size)
+    return power * 100  # Convert to percentage
+
+# First pass: Collect all data before plotting
+for i in range(1, n_samples + 1):
+    A_sample = A_conversions[:i]
+    B_sample = B_conversions[:i]
+    
+    # Calculate statistics
+    conv_rate_A = np.mean(A_sample)
+    conv_rate_B = np.mean(B_sample)
+    abs_diff = conv_rate_B - conv_rate_A
+    rel_diff = (abs_diff / conv_rate_A) * 100 if conv_rate_A > 0 else 0
+    
+    # Store results
+    data.append([i, round(conv_rate_A * 100, 1), round(conv_rate_B * 100, 1), round(rel_diff, 1)])
+    percent_diffs.append(rel_diff)
+
+# Generate frames with final charts
+for i in range(start_plot, n_samples + 1):
+    fig, ax1 = plt.subplots(1, 1, figsize=(6, 5))
+    
+    # Set title
+    plt.suptitle("What is the probability of a statistically significant finding?\n"
+                "And what is the probability that finding is accurate?", fontsize=10, fontweight='bold', ha='center')
+    
+    ax1.set_title(f'A/B Test Results at Sample Size {i}', fontsize=8)
+    
+    # Conversion Rates Bar Chart
+    conv_rates = [data[i-1][1], data[i-1][2]]
+    cohorts = ['Control Cohort', 'Experimental Cohort']
+    ax1.bar(cohorts, conv_rates, color=['grey', 'green'])
+    
+    # Confidence Intervals Calculation
+    ci_A = 1.96 * np.sqrt((conv_rates[0] / 100 * (1 - conv_rates[0] / 100)) / i) * 100
+    ci_B = 1.96 * np.sqrt((conv_rates[1] / 100 * (1 - conv_rates[1] / 100)) / i) * 100
+    std_error = np.sqrt((conv_rates[0] / 100 * (1 - conv_rates[0] / 100)) / i + (conv_rates[1] / 100 * (1 - conv_rates[1] / 100)) / i) * 100
+    
+    # Error bars
+    ax1.errorbar(cohorts, conv_rates, yerr=[ci_A, ci_B], fmt='none', capsize=5, color='black')
+    
+    # Display conversion rates on bars
+    for j, v in enumerate(conv_rates):
+        ax1.text(j, v + 2, f'{v:.1f}%', ha='center', fontsize=12, fontweight='bold', color='black', clip_on=False)
+    
+    # Statistical significance test
+    t_stat, p_value = stats.ttest_ind(A_conversions[:i], B_conversions[:i], equal_var=False)
+    significant = p_value < alpha
+    power = compute_power(i, conversion_rate_A, conversion_rate_B)
+    probability_sig_result = power + (alpha * 100)  # True positive rate + false positive rate
+    false_positive_rate = (alpha / (alpha + (power / 100))) * 100 if power > 0 else 100.0
+    
+    # Create annotation text
+    annotation_text = (
+        f'Relative percentage difference: {data[i-1][3]:.1f}%\n'
+        f'Result is: {"significant" if significant else "not significant"}, p = {p_value:.3f}\n'
+        f'Probability of statistically significant result: {probability_sig_result:.1f}%\n'
+        f'How often statistically significant result is wrong: {false_positive_rate:.1f}%'
+    )
+    
+    # Add text box
+    props = dict(boxstyle='round', facecolor='lightgrey', alpha=0.5)
+    ax1.text(0.95, 0.95, annotation_text, transform=ax1.transAxes, fontsize=10,
+             verticalalignment='top', horizontalalignment='right', bbox=props)
+    
+    ax1.set_ylim(fixed_y_min if fixed_y_min is not None else min(conv_rates) - 5, 
+                 fixed_y_max if fixed_y_max is not None else max(conv_rates) + 5)
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.1f}%'))
+    
+    plt.savefig(os.path.join(frames_folder, f'frame_{i}.png'))
+    plt.close()
+    frames.append(imageio.imread(os.path.join(frames_folder, f'frame_{i}.png')))
+
+# Create GIF and save it in the main folder
+gif_filename = f'ab_test_simulation_{timestamp}.gif'
+gif_path = os.path.join(gif_filename)
+imageio.mimsave(gif_path, frames, duration=0.05)
+
+# Display GIF in Jupyter Notebook
+display(Image(filename=gif_path))
+
+# Save data as DataFrame
+results_df = pd.DataFrame(data, columns=['Sample_Size', 'Conv_Rate_A', 'Conv_Rate_B', 'Rel_Diff'])
+
+# Display results
+print("A/B Test Simulation completed. Results saved in DataFrame.")
+print(results_df.head())
